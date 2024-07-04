@@ -55,7 +55,7 @@ function init() {
 
 	const lib = document.createElement('script'),
 		lng = new URLSearchParams(window.location.search).get('lng') || false;
-	lib.src = 'music.php?'+ (lng ? 'lng='+ lng : '') + (url.length > 1 ? '&play='+ esc(url[1]) : '');
+	lib.src = 'music.php?'+ (url.length > 1 ? 'play='+ esc(url[1]) : '') + (lng ? '&lng='+ lng : '');
 	lib.onload = function() {
 		if (!library) alert(str.nolibrary);
 		else if (!pathexp) alert(str.nopathexp);
@@ -259,7 +259,7 @@ function saveLog() {
 
 function prepPlaylistMode() {
 	cfg.after = 'stopplayback';
-	dom.hide(['enqueue', 'playlistload', 'playlistsave', 'playlibrary', 'randomlibrary', 'randomfiltered', 'sharefolder', 'library']);
+	dom.hide(['enqueue', 'playlistload', 'playlistsave', 'playlibrary', 'randomlibrary', 'randomfiltered', 'sharefolder', 'playlistclear', 'library']);
 	dom.playlist.style.minHeight = dom.playlist.style.maxHeight = 'unset';
 	cls(body, 'mode', ADD);
 	mode = 'playlist';
@@ -283,7 +283,7 @@ function prepAudio(id) {
 
 	a.onplay = function() {
 		a.log('Play');
-		if (a.src.startsWith('data:')) return;
+		if (a.src.startsWith('data')) return;	// autoplay fix
 		cls(dom.playpause, 'playing', ADD);
 		cls(dom.album, 'dim', REM);
 		cls(dom.title, 'dim', REM);
@@ -312,9 +312,9 @@ function prepAudio(id) {
 	};
 
 	a.ontimeupdate = function() {
-		if (a != audio[track] || a.src.startsWith('data:')) return;	// Already switched to other track (crossfade) || autoplay fix
+		if (a != audio[track] || a.src.startsWith('data')) return;	// Already switched to other track (crossfade) || autoplay fix
 
-		if (a.currentTime >= a.duration - cfg.buffersec) return playNext();
+		if (a.currentTime >= a.duration - cfg.buffersec) return playNext(true);
 
 		if (a.duration > 30 && (a.duration - a.currentTime) < 20) {
 			if (!audio[+!track].prepped) prepNext();
@@ -336,6 +336,7 @@ function prepAudio(id) {
 
 	a.onerror = function() {
 		a.log('Error: '+ a.error.code +' '+ a.error.message, true);
+		if (a.src.startsWith('data')) return;	// autoplay fix
 		dom.playlist.childNodes[cfg.index].setAttribute('error', 1);
 		errorCount++;
 		if (errorCount >= maxerrors)
@@ -470,6 +471,7 @@ function addFolder(e) {
 }
 
 function setFocus (el) {
+	if (el.disabled) return false;
 	el.focus();
 	const { top, bottom } = el.getBoundingClientRect(),
 		offset = cls(dom.player, 'fix') ? dom.player.offsetHeight : 0;
@@ -487,6 +489,7 @@ function setFocus (el) {
 	if (!offset) setTimeout(function() {
 		if (cls(dom.player, 'fix')) setFocus(el);
 	}, 500);
+	return true;
 }
 
 function setToast(el) {
@@ -494,7 +497,7 @@ function setToast(el) {
 		if (el.className == 'error' || cls(dom.player, 'fix')) {
 			if (el.className == 'error') log(str.error +' '+ el.textContent, true);
 			if (toast) clearTimeout(toast);
-			dom.toast.className = el.className;
+			dom.toast.className = el.id +' '+ el.className;
 			dom.toast.textContent = el.textContent;
 			dom.show('toast');
 			toast = setTimeout(function() { dom.hide('toast') }, 4000);
@@ -603,7 +606,7 @@ function findItem(e) {
 	if (e.target.tagName == 'LI')
 		setFilter(e.target.firstChild.textContent.trim());
 	else if (e.target.tagName == 'SPAN')
-		setFilter(e.target.textContent.replace(/^\(|\)$/g, ''));
+		setFilter(e.target.textContent.replace(/^\(|\)$/g, '').trim());
 }
 
 function prepDrag(e) {
@@ -635,7 +638,7 @@ function endDrag() {
 function dropItem(e) {
 	e.preventDefault();
 	e.stopPropagation();
-	const to = e.target;
+	let to = e.target;
 	if (to.tagName != 'LI') to = to.parentNode;
 	log('Drag ['+ drag.textContent +'] to place of ['+ to.textContent +']');
 	cls(to, 'over', REM);
@@ -1034,7 +1037,7 @@ function prepPlaylists(action) {
 		var playlistElements = '';
 		if (playlists.length != []) {
 			for (var p in playlists)
-				playlistElements += action == 'share' ? '<option value="'+ p +'">'+ p +'</option>' : '<button class="add">'+ p +'</button>';
+				playlistElements += action == 'share' ? '<option value="'+ p +'">'+ p +'</option>' : '<button class="enqueue">'+ p +'</button>';
 		} else playlistElements = '<p tabindex="1">'+ str.noplaylists +'</p>';
 		switch (action) {
 			case 'load':
@@ -1193,7 +1196,7 @@ function add(id, next = false) {
 	}
 }
 
-function playNext() {
+function playNext(ended = false) {
 	if (cfg.index != -1) {
 		const li = dom.playlist.childNodes[cfg.index];
 		if (li) {
@@ -1211,7 +1214,7 @@ function playNext() {
 		log('PlayNext: last minute adjustment to playlist detected, prepping next track', true);
 		prepNext();
 	}
-	if (!cfg.crossfade) stop();
+	if (!ended && !cfg.crossfade) stop();
 
 	track ^= 1;
 	const a = audio[track],
@@ -1303,11 +1306,12 @@ function toggle(e) {
 			dom.hide('afteroptions');
 			menu('after');
 			if (button.id == 'randomfiltered') {
-				const tip = dom.randomfiltered.firstElementChild || dom.randomfiltered.appendChild(document.createElement('b'));
+				const tip = dom.filtertip || dom.randomfiltered.appendChild(dom.filtertip = document.createElement('b'));
+				cls(dom.filtertip, 'filtertip', ADD);
 				tip.textContent = dom.filter.value;
 				buildFilteredLibrary();
-			} else if (dom.randomfiltered.firstElementChild)
-				dom.randomfiltered.firstElementChild.remove();
+			} else if (dom.filtertip)
+				dom.filtertip = dom.filtertip.remove();
 			return;
 		case 'lock':
 			return Popup.lock();
@@ -1386,9 +1390,11 @@ function menu(e) {
 		if (!onlinepls || url.length > 1) return;
 		el = dom.playlists;
 		btn = dom.playlistload;
+		dom.hide('afteroptions');
 	} else if (e == 'after' || dom.afterdiv.contains(e.target)) {
 		el = dom.afteroptions;
 		btn = dom.after;
+		dom.hide('playlists');
 	}
 
 	if (cls(el, 'hide') && e.type !== 'mouseleave') {
@@ -1413,7 +1419,7 @@ function menu(e) {
 				cls(dom.randomlibrary,  'on', cfg.after == 'randomlibrary'  ? ADD : REM);
 				dom.randomfiltered.disabled = dom.filter.value == '';
 				dom.show(el.id);
-				setFocus(dom[cfg.after]);
+				setFocus(dom[cfg.after]) || setFocus(dom.stopplayback);
 		}
 	} else switch (el) {
 			case dom.playlists:
@@ -1427,6 +1433,7 @@ function menu(e) {
 
 function clearPlaylist() {
 	if (cfg.locked || mode || cfg.playlist.length == 0 || !confirm(str.clearplaylist)) return;
+	audio[0].prepped = audio[1].prepped = false;
 	cfg.playlist.length = 0;
 	cfg.index = -1;
 	dom.playlist.innerHTML = '';
@@ -1470,7 +1477,10 @@ function filter(instant = false) {	// Gets event from oninput
 	});
 
 	if (length) {
-		const termsArray = terms.toLowerCase().split(' ');
+		if (terms.indexOf('"') == -1)
+			var termsArray = terms.toLowerCase().split(' ');
+		else
+			var termsArray = terms.match(/"[^"]+"|[^ ]+/g).map(t => t.replaceAll('"', ''));
 
 		ffor(tree, function(f) {
 			const path = f.path.toLowerCase();
@@ -1802,7 +1812,8 @@ function prepHotkeys() {
 			'PageUp': dom.next
 		}
 	};
-	document.querySelectorAll('[accesskey]' ).forEach(function(el) { dom.keys[el.accessKey] = el });
+	document.querySelectorAll(':not(.menu) > [accesskey]').forEach(function(el) { dom.keys[el.accessKey] = el });
+	document.querySelectorAll('.menu > [accesskey]').forEach(function(el) { if (!dom.keys[el.parentNode.id]) dom.keys[el.parentNode.id] = {}; dom.keys[el.parentNode.id][el.accessKey] = el });
 	document.querySelectorAll('[contextkey]').forEach(function(el) { dom.keys[el.getAttribute('contextkey')] = el });
 
 	dom.filter.addEventListener('keypress', function(e) {
@@ -1851,16 +1862,23 @@ function prepHotkeys() {
 
 		if (el.tagName == 'TEXTAREA') return;
 
-		const keyEl = dom.keys[e.key];
+		const parentEl = el.parentNode;
+		const menu = cls(parentEl, 'menu') ? parentEl.id : false;
+		const menuKey = menu && dom.keys[menu] ? dom.keys[menu][e.key] : false;
+		const keyEl = menuKey || dom.keys[e.key];
 
 		if (keyEl) {
 			e.preventDefault();
-			if (!dom.tree.contains(e.target))
+			if (!menuKey && !dom.tree.contains(e.target))
 				e.target.blur();
 			if (e.key == keyEl.getAttribute('contextkey'))
 				return keyEl.dispatchEvent(new CustomEvent('contextmenu'));
-			else
-				return keyEl.click();
+			else {
+				if (keyEl.disabled) return;
+				keyEl.click();
+				if (menu) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+				return true;
+			}
 		}
 
 		switch (e.key) {
